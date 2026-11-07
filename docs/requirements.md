@@ -209,4 +209,71 @@ for target `kg` (mass): `g`, `mg`, `t`, `lb`, `oz`.
 
 # Жизненный цикл Job
 
+**Scenario 1**
+
+States: `Created`, `Running`, `Done`, `Error`, `Final Node`.
+
+Transitions:
+
+`start` → `Created`: create task [input payload received] / save task to history, generate task ID.
+
+`Created` → `Running`: start execution [dispatcher routes to Unit Converter] / lock task for execution.
+
+`Running` → `Done`: conversion successful [unit validated, math completed, uncertainty propagated] / save result, precision, and experiment/sample ID to history.
+
+`Running` → `Error`: validation failed [target unit unsupported, precision out of 0–6 bounds, negative uncertainty] / save error history record, return error message.
+
+`Done` → `final`; `Error` → `final`.
+
+**Scenario 2**
+
+States: Created, Running (sub-states: Resolving, Fetching, Validating), Done, Error, Final Node.
+
+**Transitions:**
+
+`start` → `Created`: create task [weather request received] / save task, generate task ID.
+
+`Created` → `Resolving`: start execution [dispatcher routes to Weather Tool] / check cache.
+
+`Resolving` → `Fetching`: cache miss [city not in cache] / resolve city to lat/lon, call OpenWeatherMap API.
+
+`Resolving` → `Done`: cache hit [valid cache entry exists, TTL < 10 min] / skip API, load from cache.
+
+`Fetching` → `Validating`: API response received [HTTP 200 OK] / parse JSON.
+
+`Validating` → `Done`: fields valid [temp, humidity, pressure, wind within expected ranges] / save result to history, update cache with TTL = 10 min.
+
+`Fetching` → `Error`: API failure [timeout, HTTP 4xx/5xx, network unreachable] / record attempt, return error message.
+
+`Validating` → `Error`: invalid payload [missing fields, values out of range, garbage response] / record error, do NOT cache.
+
+`Done` → `final`; `Error` → `final`.
+
+---
+
+**Scenario 3**
+
+**States:** `Created`, `Running`, `Done`, `Error`, `Final Node`.
+
+**Transitions:**
+
+*   `start` → `Created`: **create task** [conversion request received] / *save task, generate task ID.*
+*   `Created` → `Running`: **start execution** [dispatcher routes to Unit Converter (length)] / *lock task.*
+*   `Running` → `Done`: **conversion successful** [value > 0, finite, within range; source and target units share the same dimension (Length)] / *apply exact factor from registry, round half-up to 3 decimals, save history record (input, output, factor version, engineer ID).*
+*   `Running` → `Error`: **validation failed** [value ≤ 0, value = Infinity/NaN, out of supported range, or incompatible dimensions] / *save error record with reason code (e.g., `INVALID_VALUE`, `INCOMPATIBLE_DIMENSIONS`), do not return numeric result.*
+*   `Done` → `final`; `Error` → `final`.
+
+
+**Scenario 4**
+
+States: `Created`, `Running`, `Done`, `Error`, `Final Node`.
+
+**Transitions:**
+
+*   `start` → `Created`: **create task** [transformation request received] / *save task, generate task ID.*
+*   `Created` → `Running`: **start execution** [dispatcher routes to Text Transformer] / *lock task.*
+*   `Running` → `Done`: **transformation successful** [text is non-empty, length ≤ limit, profile `title-basic-v1` exists, characters supported] / *tokenize, apply profile, save transformation record (input, output, profile id/version, author ID, document ID).*
+*   `Running` → `Error`: **validation failed** [text empty, exceeds length limit, unknown profile, unsupported characters] / *save error record with reason code (e.g., `PROFILE_NOT_FOUND`, `TEXT_TOO_LONG`).*
+*   `Done` → `final`; `Error` → `final`.
+
 # Раздел «Что предложил ИИ»
