@@ -114,7 +114,62 @@ Requests conversion to **miles** with **3 decimal places**.
 6. Return result: “The Quick Brown Fox Jumps Over The Lazy Dog”, profile title-basic-v1, timestamp.
 
 
-# Критерии приемки по шаблонам EARS
+# Критерии приемки  в виде Дано / Когда / Тогда (BDD) или по шаблонам EARS
+
+### Scenario 1: Convert Celsius to Fahrenheit (Unit Converter: temperature)
+
+1. **Ubiquitous — always true: [Subject] shall [Action]**
+
+    **Bad**: “It would be good if the tool converted temperatures accurately.”
+
+    **EARS**: The tool **shall** convert temperature values using the canonical formulas: °F = °C × 9/5 + 32, K = °C + 273.15.
+
+    **EARS**: The tool **shall** support the temperature units °C, °F, and K.
+
+    **EARS**: The tool **shall** save every successful conversion result together with the experiment/sample id in a history record.
+
+2. **Event-driven — triggered by event: WHEN [Event], [Subject] shall [Action]**
+
+    **EARS**: **WHEN** the researcher submits a conversion request with value 25 °C, target unit °F, precision 2, and experiment/sample id EXP-2026-041, the tool **shall** validate that °F is a supported target unit.
+
+    **EARS**: **WHEN** validation succeeds, the tool **shall** convert the value using the canonical formula °F = °C × 9/5 + 32, producing raw result 77.0 °F.
+
+    **EARS**: **WHEN** conversion completes, the tool **shall** apply the requested precision of 2 decimal places, producing 77.00 °F.
+
+    **EARS**: **WHEN** conversion completes, the tool **shall** return the result 77.00 ± 0.18 °F to the researcher.
+
+3. **State-driven — while in a state: WHILE [State], [Subject] shall [Action]**
+
+    **Bad:** “While converting, show something.”
+
+    **EARS: WHILE** a conversion request is being processed, the tool **shall** display a loading state and **shall not** accept a duplicate submission of the same request.
+
+    **EARS: WHILE** the experiment/sample id is associated with a conversion record, the tool **shall** keep that association immutable in the history.
+
+4. **Unwanted behavior — failure handling: IF [Failure/undesired event], THEN [Subject] shall [Action]**
+
+    **Bad:** “If the unit is wrong, tell the user.”
+
+    **EARS: IF** the requested target unit is not one of °C, °F, K, **THEN** the tool **shall** reject the request, produce no result, save error history record, and return an error listing the supported units.
+
+    **EARS: IF** the input value is below absolute zero (−273.15 °C), **THEN** the tool **shall** reject the request, produce no result, save error history record, and return the error “Value is below absolute zero.”
+
+    **EARS: IF** the requested precision is outside 0–6 decimal places, **THEN** the tool **shall** reject the request and return the error “Precision must be between 0 and 6.”
+
+    **EARS: IF** the measurement uncertainty is negative, **THEN** the tool **shall** reject the request and return the error “Uncertainty must be non-negative.”
+
+    **EARS: IF** the experiment/sample id is missing, **THEN** the tool **shall** regenarate experiment/sample id and shall not save a history record without it.
+
+5. **Optional features — only when a condition/resource exists: WHERE [Condition], [Subject] shall [Action]**
+
+    **Bad:** “If there is uncertainty, maybe show it.”
+
+    **EARS: WHERE** the researcher provides a measurement uncertainty of ±0.1 °C, the tool **shall** propagate it through the canonical formula (±0.1 °C × 9/5 = ±0.18 °F) and **shall** include it in the returned result as 77.00 ± 0.18 °F.
+
+    **EARS: WHERE** the researcher provides a measurement uncertainty, the tool **shall** save the propagated uncertainty in the history record alongside the result and experiment/sample id.
+
+    **EARS: WHERE** no measurement uncertainty is provided, the tool **shall** return the result without an uncertainty component and **shall** record in history that uncertainty was not supplied.
+
 
 # Ошибочные сценарии
 
