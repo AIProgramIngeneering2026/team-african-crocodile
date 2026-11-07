@@ -507,3 +507,9 @@ States: `Created`, `Running`, `Done`, `Error`, `Final Node`.
 *   `Done` → `final`; `Error` → `final`.
 
 # Раздел «Что предложил ИИ»
+
+Here is the prompt - https://chat.deepseek.com/share/uk4swf50lvy2z6b75u
+
+- We accept the first breakdown because researchers may input as if F or °F. 
+- We do not accept the second breakdown because the uncertainity is more significant than rounding.
+- we do not accept the third breakdown because we want the researcher notice the error in their history.
