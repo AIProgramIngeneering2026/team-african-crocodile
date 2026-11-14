@@ -93,8 +93,8 @@ Participant:
 1. Civil engineer inputs bridge span **12.345 km**. 
 Requests conversion to **miles** with **3 decimal places**. 
 2. Tool validates: value is positive, finite, within supported range. 
-3. Tool resolves unit pair `km → mi` and looks up the **exact conversion factor** from the unit registry: 1 `km = 0 621371192237334 mi` (derived from `1 mile = 1.609344 km` exactly). 
-4. Tool computes raw result: **7 670998... mi.** 
+3. Tool resolves unit pair `km → mi` and looks up the **exact conversion factor** from the unit registry: 1 `km = 0.621371192237334 mi` (derived from `1 mile = 1.609344 km` exactly). 
+4. Tool computes raw result: **7.670998... mi.** 
 5. Tool applies rounding rule: **half-up to 3 decimals → 7.671 mi**. 
 6. Tool records the conversion: input, output, factor id version, rounding rule, timestamp, engineer id. 
 7. Result return: **7.671 mi** (rounded), plus raw value and the exact factor used.
@@ -176,9 +176,9 @@ Requests conversion to **miles** with **3 decimal places**.
 
     **Bad:** “The system should return weather data.”
 
-    **EARS:** The system **hall** support weather requests for a city identified by name and optional country code, with units metric or imperial.
+    **EARS:** The system **shall** support weather requests for a city identified by name and optional country code, with units metric or imperial.
 
-    **EARS:** The system ** resolve every city request to a unique cityId and geographic coordinates before calling the weather provider.
+    **EARS:** The system **shall** resolve every city request to a unique cityId and geographic coordinates before calling the weather provider.
 
     **EARS:** The system **shall** display temperature, humidity, and air pressure in the units corresponding to the requested unit system.
 
@@ -227,7 +227,8 @@ Requests conversion to **miles** with **3 decimal places**.
 
     **EARS: IF** the OpenWeatherMap API returns HTTP `429`, **THEN** the system **shall** return `RATE_LIMITED` with a retry-after hint if provided, and **shall not** cache the error response.
 
-    **EARS: IF** the OpenWeatherMap API times out or returns HTTP `5xx`, **THEN** the system **shall** return `WEATHER_SERVICE_UNAVAILABLE` and **may** return a stale cache entry with a `stale=true` warning only if the requirement explicitly allows stale fallback.
+    **EARS: IF** the OpenWeatherMap API times out or returns HTTP `5xx`, **THEN** the system **shall** return `WEATHER_SERVICE_UNAVAILABLE` and **shall not** return stale cached data.
+
 
     **EARS: IF** the API response is missing a required field (temperature, humidity, pressure), **THEN** the system **shall** treat the response as malformed, **shall not** cache it, and **shall** return `MALFORMED_RESPONSE`.
 
@@ -308,7 +309,7 @@ Requests conversion to **miles** with **3 decimal places**.
     **EARS: IF** the unit pair `km → mi` is not supported by the registry, **THEN** the tool 
     **shall** reject the request and return `UNSUPPORTED_UNIT_PAIR`.
     
-    **EARS: IF** the exact conversion factor or its version is missing from the registry, **THEN** the tool **shall** reject the request, save no history record, and return `CONVERSION_FACTOR_UNAVAILABLE`.
+    **EARS: IF** the exact conversion factor or its version is missing from the registry, **THEN** the tool **shall** finish the Job in state `error` with code `CONVERSION_FACTOR_UNAVAILABLE` and the failed Job **shall** be kept in history.
     
     **EARS: IF** the requested precision is outside the allowed range, **THEN** the tool **shall** reject the request and return `INVALID_PRECISION`.
     
@@ -405,18 +406,14 @@ Requests conversion to **miles** with **3 decimal places**.
 
 ### Scenario 5: API fetch timeout (error)
 
+1. Scientific researcher requests current weather for **London**, **GB**, units **metric**; the cache entry is empty.
+2. Weather Tool calls OpenWeatherMap through the adapter with connect timeout **3 s** and read timeout **10 s**.
+3. OpenWeatherMap accepts the connection but does not send a response within 10 s.
+4. The adapter stops waiting, closes the connection and logs the attempt: request id, endpoint, timeout type (read), elapsed time, timestamp.
+5. The Job ends in state `error` with code `WEATHER_SERVICE_UNAVAILABLE`; nothing is cached.
+6. Return error: "Request timed out after 10 s. No data returned. You can retry."
+7. The researcher can retry by sending a new request (new `Idempotency-Key`).
 
-1. Scientific researcher requests a dataset from an external scientific API (e.g., climate observations for station GB-LON-01, for current time).
-
-2. Tool sends request with a configured connect timeout 3 s and read timeout 10 s.
-
-3. External API accepts the connection but does not send a response within 10 s.
-
-4. Tool cancels the read, closes the connection, and records the attempt: request id, endpoint, timeout type (read), elapsed time, timestamp, researcher id, dataset id.
-
-5. Return error: “Request timed out after 10 s. No data returned. You can retry.
-
-6. The researcher can retry manually; 
 
 ### Scenario 6: Incompatible unit categories (error)
 
@@ -437,11 +434,34 @@ for target `kg` (mass): `g`, `mg`, `t`, `lb`, `oz`.
 7. Return error: **“Cannot convert meter to kilogram — length vs mass. Use cm/ft for length or g/lb for mass.”**
 
 
+ ## Критерии приемки  в виде Дано / Когда / Тогда (BDD) или по шаблонам EARS за ошибочные сценарии
+
+
+### Scenario 5: API fetch timeout (error)
+
+- **EARS:** The Weather Tool **shall** use a connect timeout of 3 s and a read timeout of 10 s for every OpenWeatherMap request.
+- **EARS: WHEN** OpenWeatherMap does not send a response within the 10 s read timeout, the adapter **shall** close the connection and log: request id, endpoint, timeout type, elapsed time and timestamp.
+- **EARS: WHEN** the read timeout occurs, the system **shall** finish the Job in state `error` with code `WEATHER_SERVICE_UNAVAILABLE` and the message "Request timed out after 10 s. No data returned. You can retry."
+- **EARS: IF** the connection cannot be established or OpenWeatherMap returns HTTP 5xx, **THEN** the adapter **shall** retry once after 0.5 s and, if the retry also fails, return `WEATHER_SERVICE_UNAVAILABLE`.
+- **EARS:** The system **shall not** cache a failed weather request.
+
+
+### Scenario 6: Incompatible unit categories (error)
+
+- **EARS:** The tool **shall** convert only between units of the same dimension.
+- **EARS: WHEN** the source and target units have different dimensions, the tool **shall** finish the Job in state `error` with code `INCOMPATIBLE_DIMENSIONS` and **shall not** return a numeric result.
+- **EARS: WHEN** the conversion is refused, the system **shall** keep the failed Job in history with input value, source and target unit, detected dimensions, reason code, timestamp and engineer id.
+- **EARS: WHEN** the conversion is refused, the tool **shall** return compatible alternatives for the source unit and for the target unit.
+- **EARS: IF** a unit is not in the unit registry, **THEN** the tool **shall** finish the Job in state `error` with code `UNSUPPORTED_UNIT` and the list of supported units.
+
+
 # Жизненный цикл Job
 
-**Scenario 1**
 
-States: `Created`, `Running`, `Done`, `Error`, `Final Node`.
+States: `created`, `running`, `done`, `error` (`done` and `error` are final).
+
+
+**Scenario 1**
 
 Transitions:
 
@@ -454,6 +474,8 @@ Transitions:
 `Running` → `Error`: validation failed [target unit unsupported, precision out of 0–6 bounds, negative uncertainty] / save error history record, return error message.
 
 `Done` → `final`; `Error` → `final`.
+
+---
 
 **Scenario 2**
 
@@ -493,6 +515,7 @@ States: Created, Running (sub-states: Resolving, Fetching, Validating), Done, Er
 *   `Running` → `Error`: **validation failed** [value ≤ 0, value = Infinity/NaN, out of supported range, or incompatible dimensions] / *save error record with reason code (e.g., `INVALID_VALUE`, `INCOMPATIBLE_DIMENSIONS`), do not return numeric result.*
 *   `Done` → `final`; `Error` → `final`.
 
+---
 
 **Scenario 4**
 
@@ -505,6 +528,38 @@ States: `Created`, `Running`, `Done`, `Error`, `Final Node`.
 *   `Running` → `Done`: **transformation successful** [text is non-empty, length ≤ limit, profile `title-basic-v1` exists, characters supported] / *tokenize, apply profile, save transformation record (input, output, profile id/version, author ID, document ID).*
 *   `Running` → `Error`: **validation failed** [text empty, exceeds length limit, unknown profile, unsupported characters] / *save error record with reason code (e.g., `PROFILE_NOT_FOUND`, `TEXT_TOO_LONG`).*
 *   `Done` → `final`; `Error` → `final`.
+
+
+--- 
+
+**ERROR Scenario 5**
+
+States: running (sub-states: Resolving, Fetching, Validating:*Final Node*).
+
+resolving → fetching → validating are internal steps of the Weather Tool inside `running`, not Job states.
+
+
+---
+
+**ERROR Scenario 6**
+
+States: `created`, `running`, `done`, `error` (`done` and `error` are final).
+
+
+**Transitions:**
+
+- `start` → `created`: request accepted — operation is known and parameters passed `Tool.validate` / save Job, generate Job id.
+- `created` → `running`: Dispatcher starts the Tool.
+- `running` → `done`: Tool returned a result / save result to history.
+- `running` → `error`: Tool returned a domain or external error (e.g. `UNSUPPORTED_UNIT`, `BELOW_ABSOLUTE_ZERO`, `INCOMPATIBLE_DIMENSIONS`, `CONVERSION_FACTOR_UNAVAILABLE`, `CITY_NOT_FOUND`, `WEATHER_SERVICE_UNAVAILABLE`, `MALFORMED_RESPONSE`) / save error to history.
+- `created`/`running` → `error`: service restarted while the Job was not finished / `JOB_INTERRUPTED`.
+
+Malformed parameters (missing field, wrong type, precision outside 0–6, negative uncertainty, value ≤ 0 for length,
+empty or too long text, unknown profile, missing ids) are rejected with `422` **before** a Job is created, so they
+produce no history record.
+
+
+
 
 # Раздел «Что предложил ИИ»
 
