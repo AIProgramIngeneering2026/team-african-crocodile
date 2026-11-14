@@ -508,7 +508,68 @@ States: `Created`, `Running`, `Done`, `Error`, `Final Node`.
 
 # Раздел «Что предложил ИИ»
 
-Here is the prompt - https://chat.deepseek.com/share/uk4swf50lvy2z6b75u
+Here is the prompt - 
+
+Scenario 1: Convert Celsius to Fahrenheit (Unit Converter: temperature)
+
+    Researcher inputs: value 25 °C, target unit °F, precision 2 decimal places, optional measurement uncertainty ±0.1 °C, experiment/sample id.
+    Tool validates: target unit is supported.
+    Tool converts using the canonical formula.
+    Tool propagates uncertainty: ±0.1 °C × 9/5 = ±0.18 °F → 77.00 ± 0.18 °F.
+    Tool saves result and experiment/sample id in a history record.
+    Return result: 77.00 ± 0.18 °F.
+
+Scenario 2: Request weather of a city. (OpenWeatherMap: API)
+
+    User requests current weather for London, GB, units metric.
+    Cache for London+metric is empty.
+    System resolves city → cityId=2643743, lat/lon.
+    System calls OpenWeatherMap.
+    API returns: 15.2 °C, 72%, 1013 hPa, 4.5 m/s, observed at 14:20.
+    System validates fields and ranges.
+    System caches the result with TTL = 10 min.
+    Return the result: 15.2 °C, 72%, 1013 hPa
+
+Scenario 3: Convert kilometers to miles (Unit Converter: length)
+
+    Civil engineer inputs bridge span 12.345 km. Requests conversion to miles with 3 decimal places.
+    Tool validates: value is positive, finite, within supported range.
+    Tool resolves unit pair km → mi and looks up the exact conversion factor from the unit registry: 1 km = 0 621371192237334 mi (derived from 1 mile = 1.609344 km exactly).
+    Tool computes raw result: 7 670998... mi.
+    Tool applies rounding rule: half-up to 3 decimals → 7.671 mi.
+    Tool records the conversion: input, output, factor id version, rounding rule, timestamp, engineer id.
+    Result return: 7.671 mi (rounded), plus raw value and the exact factor used.
+
+Scenario 4: Convert a text to Title-case (text transformer: title)
+
+    Author inputs text: "the quick brown fox jumps over the lazy dog".
+
+    Author selects profile: title-basic-v1.
+
+    Tool validates: text is non-empty, within length limit, profile exists, characters supported.
+
+    Tool tokenizes the text and applies title-basic-v1.
+
+    Tool saves a transformation record: input, output, profile id/version, timestamp, author id, document id.
+
+    Return result: “The Quick Brown Fox Jumps Over The Lazy Dog”, profile title-basic-v1, timestamp.
+
+    find 3 more ways to break my main scenario?
+    
+
+    AI Result - Assuming your main scenario is **Scenario 1: Celsius → Fahrenheit with uncertainty and history**, here are 3 more ways to break it:
+
+| # | Break vector | Example input / action | Why it breaks the scenario | Expected safe behavior |
+|---|---|---|---|---|
+| 1 | **Unit alias / Unicode normalization** | Target unit is `F`, `fahrenheit`, `°F` with U+00B0, or `°F` with U+02DA; input is `25 C` without `°` | Tool validates “target unit is supported,” but if aliases/case/Unicode are not canonicalized it may reject valid requests or save inconsistent unit IDs in history | Canonicalize to a single unit ID, e.g. `degF`; reject only truly unsupported units; store canonical unit IDs |
+| 2 | **Rounding boundary + uncertainty rounding** | `25.004 °C`, precision `2`, uncertainty `±0.1 °C` → raw `77.0072 ± 0.18 °F`; or negative boundary like `-40.005 °C`; or precision `0` / negative / huge | “Half-up to 2 decimals” is underspecified for negative values, binary floating point, and uncertainty. Result and uncertainty may be rounded inconsistently, e.g. result `77.01` but uncertainty still `±0.18`, or negative half-up rounds the wrong direction | Define rounding rule explicitly for result and uncertainty: decimal/half-up away from zero, same precision, or significant-figures rule; test negative and boundary cases |
+| 3 | **Physically invalid / non-finite values** | `-300 °C`, `NaN °C`, `Infinity °C`, `1e308 °C`, uncertainty `±-0.1 °C`, or value + uncertainty crossing absolute zero | The scenario says the tool validates target unit, but not that it validates physical range, finiteness, or uncertainty sign. Canonical formula will happily convert below absolute zero or produce overflow/NaN and save a bad history record | Reject values below `-273.15 °C`, non-finite numbers, negative uncertainty, and uncertainty intervals crossing absolute zero; validate before conversion and history save |
+
+A good extra test set: `target="fahrenheit"`, `value=25.004`, `precision=2`, `uncertainty=±0.1`, and `value=-300` — each should either canonicalize correctly or fail with a clear validation error, not silently return a wrong/ambiguous result.
+
+____
+
+***Our Answers for the questions***
 
 - We accept the first breakdown because researchers may input as if F or °F. 
 - We do not accept the second breakdown because the uncertainity is more significant than rounding.
