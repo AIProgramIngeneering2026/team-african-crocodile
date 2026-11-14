@@ -22,3 +22,37 @@ contract says it.
 
 **Summary:** 8 of 10 cards are fully answered by the contract. K6 (cancel) and the "another client's Job" part of
 K8 are consciously not closed, with reasons in ADR-0002 and ADR-0004. No card was "not applicable".
+
+---
+
+## Что предложил ИИ
+
+**Prompt:**
+
+```text
+You are the attacking team in "contract poker". Below is the contract of our service: openapi.yaml,
+tool-contract.md, the Job state diagram from architecture.md, and ADR-0001…0004. Below that is the deck
+(cards K1–K10) and our table of answers for each card.
+
+Your task: find 3 MORE concrete situations that our contract does NOT answer — not repeats of K1–K10 and not
+things the table already covers. For each situation give:
+1) the concrete request and data,
+2) the question "what does the API return, what state is the Job in?",
+3) why the contract has no answer (quote the place that is silent or contradictory),
+4) how you would close the gap with the smallest change.
+
+[openapi.yaml]
+[tool-contract.md]
+[architecture.md §3]
+[ADR-0001…0004]
+[deck K1–K10]
+[our K1–K10 table]
+```
+
+**Findings and decisions:**
+
+| # | Situation the model found | Gap | Decision |
+|---|---|---|---|
+| 1 | `get_weather {city: "Springfield", country: "US"}` — the provider returns several Springfields even with a country code. | The contract said `AMBIGUOUS_CITY` only for "> 1 candidate and no `country`". With a country and still several candidates the behaviour was undefined; the client cannot narrow further because there is no `state` parameter. | **Accepted.** With `country` given, the Tool takes the provider's first candidate; `city_name`, `lat`, `lon` in the result show which one. No new parameter (scope unchanged). Changed: [tool-contract.md §4.2](tool-contract.md#42-get_weather--weathertool-version-get_weather1) "Algorithm". |
+| 2 | Two `get_weather` Jobs for London+metric arrive at the same moment with an empty cache; also: the provider's `observed_at` is already 50 minutes old when cached. | Requirement 2 says "shall not create duplicate cache entries", but the contract did not say what happens with parallel misses, and whether TTL is counted from `observed_at` or from caching time. | **Accepted.** `put` overwrites by key (never two entries per key); parallel misses may both call the provider (accepted cost); TTL counted from `cached_at`, the result shows both `cached_at` and `observed_at`. Changed: [tool-contract.md §4.2](tool-contract.md#42-get_weather--weathertool-version-get_weather1) "Cache rules". |
+| 3 | First request `{value: 12.345, from_unit: km, to_unit: mi, engineer_id: E1}`; retry with the same key adds `precision: 3` (the default). | Is it "the same body"? If the hash is over the raw body, the retry gets `409` although the meaning is the same. | **Rejected (only documented).** A retry must resend exactly the same body — that is what HTTP client retries do. Hashing normalised params would require validating before the idempotency lookup and would couple the key to Tool defaults, which may change between Tool versions. Clarified in [ADR-0003](adr/0003-idempotency-key.md) Decision 2. |
