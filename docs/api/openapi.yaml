@@ -1,0 +1,682 @@
+openapi: 3.1.0
+info:
+  title: Job Execution Service API
+  version: 1.0.0
+  description: |
+    Runs small computations as Jobs and keeps their history.
+    Operations (Tools): `convert_unit`, `get_weather`, `transform_text`.
+
+    ## Rules that apply to every operation
+
+    * **Execution is synchronous** (ADR-0002): `POST /jobs` returns after the Job has reached a final state
+      (`done` or `error`). Worst case is about 17 s (`get_weather` with one retry). Recommended client timeout: 20 s.
+      Cancellation is not supported.
+    * **Idempotency** (ADR-0003): `POST /jobs` requires the `Idempotency-Key` header. Same key + same body → the
+      same Job is returned (`200`, `Idempotent-Replayed: true`), the Tool is **not** executed again. Same key +
+      different body → `409 IDEMPOTENCY_KEY_REUSED`. Keys are kept as long as the Job is kept.
+    * **HTTP status describes the request, `Job.status` describes the work.** A Job whose Tool failed
+      (e.g. OpenWeatherMap unavailable) is still returned with `201`, with `status: error` and an `error` object.
+    * **Two validation stages** (see `docs/tool-contract.md` §3):
+      1. Request/parameter form — checked before a Job exists → `400`/`413`/`415`/`422`, no Job, no history.
+      2. Domain rules and execution (unit registry, physics, external service) → Job is created and ends in
+         `error`; it stays in history.
+    * **Unified error format** — every error, both HTTP errors and `Job.error`, uses the `Error` schema:
+      `code` (machine-readable, stable), `message` (human-readable), `details` (optional, code-specific),
+      and for HTTP errors also `correlation_id`. Invalid parameters list **every** wrong field in
+      `details.fields[]` with its JSON path.
+    * **Limits** (card K7): request body ≤ 64 KiB (`413`), `text` ≤ 10 000 characters, `|value|` ≤ 1e12.
+    * **No authentication in v1** (ADR-0004): Job ids are random UUIDv4; anyone who knows an id can read the Job.
+      Do not put personal data into parameters.
+    * **Correlation id**: the client may send `X-Correlation-Id`; otherwise the service generates one. It is
+      returned in the response header, in error bodies, stored with the Job and written to every log line.
+    * Timestamps are ISO 8601 in UTC (`2026-11-14T14:20:00Z`).
+servers:
+  - url: http://localhost:8000
+    description: Local run (docker compose up)
+
+tags:
+  - name: jobs
+  - name: health
+
+paths:
+  /jobs:
+    post:
+      tags: [jobs]
+      operationId: createJob
+      summary: Create a Job and execute it synchronously
+      description: |
+        Order of checks (the first failing check decides the answer):
+        1. `Content-Type` is `application/json` → else `415 UNSUPPORTED_MEDIA_TYPE`.
+        2. Body ≤ 64 KiB → else `413 PAYLOAD_TOO_LARGE`.
+        3. `Idempotency-Key` present and valid → else `400 IDEMPOTENCY_KEY_REQUIRED`.
+        4. Body is a JSON object with string `operation` and object `params` → else `400 MALFORMED_REQUEST`.
+        5. Key already used → same body: `200` with the existing Job (any status, also `created`/`running`
+           if the first request is still executing); different body: `409 IDEMPOTENCY_KEY_REUSED`.
+        6. `operation` is registered → else `422 UNKNOWN_OPERATION` (lists available operations).
+        7. `Tool.validate(params)` → else `422 VALIDATION_ERROR` with all wrong fields.
+        8. Job is created (`created`), executed (`running`) and finished (`done` / `error`) → `201`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateJobRequest'
+            examples:
+              celsiusToFahrenheit:
+                summary: Scenario 1 — 25 °C → °F with uncertainty
+                value:
+                  operation: convert_unit
+                  params:
+                    value: 25
+                    from_unit: C
+                    to_unit: F
+                    precision: 2
+                    uncertainty: 0.1
+                    experiment_id: EXP-2026-041
+              kilometersToMiles:
+                summary: Scenario 3 — 12.345 km → mi
+                value:
+                  operation: convert_unit
+                  params:
+                    value: 12.345
+                    from_unit: km
+                    to_unit: mi
+                    precision: 3
+                    engineer_id: ENG-007
+              weatherLondon:
+                summary: Scenario 2 — weather in London, GB
+                value:
+                  operation: get_weather
+                  params:
+                    city: London
+                    country: GB
+                    units: metric
+              titleCase:
+                summary: Scenario 4 — Title Case
+                value:
+                  operation: transform_text
+                  params:
+                    text: the quick brown fox jumps over the lazy dog
+                    profile: title-basic-v1
+                    author_id: AUTH-12
+                    document_id: DOC-345
+      responses:
+        '201':
+          description: Job created and executed. Check `status`; `error` is filled when the Tool failed.
+          headers:
+            Location:
+              description: URL of the created Job.
+              schema: { type: string, example: /jobs/3f6c2a4e-8a43-4c1b-9f0e-2d1b7f8a9c10 }
+            X-Correlation-Id:
+              $ref: '#/components/headers/CorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+              examples:
+                done:
+                  summary: Scenario 1 finished
+                  value:
+                    id: 3f6c2a4e-8a43-4c1b-9f0e-2d1b7f8a9c10
+                    operation: convert_unit
+                    params: { value: 25, from_unit: C, to_unit: F, precision: 2, uncertainty: 0.1, experiment_id: EXP-2026-041 }
+                    status: done
+                    result:
+                      value: 77.0
+                      raw_value: 77.0
+                      unit: F
+                      uncertainty: 0.18
+                      uncertainty_supplied: true
+                      precision: 2
+                      rounding_rule: half-up
+                      display: "77.00 ± 0.18 °F"
+                      source: { value: 25, unit: C }
+                      conversion: { id: "C->F", version: "1", kind: formula, expression: "F = C × 9/5 + 32", factor: null }
+                      experiment_id: EXP-2026-041
+                      engineer_id: null
+                    error: null
+                    tool_version: convert_unit/1
+                    correlation_id: 6b1d0c9e2f
+                    created_at: '2026-11-14T14:20:00Z'
+                    started_at: '2026-11-14T14:20:00Z'
+                    finished_at: '2026-11-14T14:20:00Z'
+                failedIncompatible:
+                  summary: Scenario 6 — metre → kilogram, Job kept in history with error
+                  value:
+                    id: 9a0d4f61-2b7e-4c55-a1f3-0e6d3c2b1a90
+                    operation: convert_unit
+                    params: { value: 12.5, from_unit: m, to_unit: kg, engineer_id: ENG-007 }
+                    status: error
+                    result: null
+                    error:
+                      code: INCOMPATIBLE_DIMENSIONS
+                      message: Cannot convert meter to kilogram — length vs mass. Use cm/ft for length or g/lb for mass.
+                      details:
+                        source_dimension: length
+                        target_dimension: mass
+                        alternatives_for_source: [mm, cm, m, km, in, ft, yd, mi]
+                        alternatives_for_target: [mg, g, kg, t, lb, oz]
+                    tool_version: convert_unit/1
+                    correlation_id: 0c4e1d7a55
+                    created_at: '2026-11-14T14:21:00Z'
+                    started_at: '2026-11-14T14:21:00Z'
+                    finished_at: '2026-11-14T14:21:00Z'
+                failedWeatherTimeout:
+                  summary: Scenario 5 — OpenWeatherMap did not answer
+                  value:
+                    id: 51c2e7b0-6d0a-4f3e-8b9c-7a1e2d3f4b5c
+                    operation: get_weather
+                    params: { city: London, country: GB, units: metric }
+                    status: error
+                    result: null
+                    error:
+                      code: WEATHER_SERVICE_UNAVAILABLE
+                      message: Request timed out after 10 s. No data returned. You can retry with a new Idempotency-Key.
+                      details: { cause: read_timeout, attempts: 1, elapsed_ms: 10012 }
+                    tool_version: get_weather/1
+                    correlation_id: a91f33c0de
+                    created_at: '2026-11-14T14:22:00Z'
+                    started_at: '2026-11-14T14:22:00Z'
+                    finished_at: '2026-11-14T14:22:10Z'
+        '200':
+          description: |
+            Replay: a Job with this `Idempotency-Key` and the same body already exists. It is returned as it is now;
+            the Tool is not executed again. If the first request is still executing, `status` is `created` or
+            `running` — poll `GET /jobs/{job_id}`.
+          headers:
+            Idempotent-Replayed:
+              description: Always `true` on a replay.
+              schema: { type: string, enum: ['true'] }
+            Location:
+              schema: { type: string }
+            X-Correlation-Id:
+              $ref: '#/components/headers/CorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '400':
+          description: '`MALFORMED_REQUEST` or `IDEMPOTENCY_KEY_REQUIRED`. No Job is created.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                missingKey:
+                  value:
+                    error:
+                      code: IDEMPOTENCY_KEY_REQUIRED
+                      message: Header Idempotency-Key is required (1–128 visible ASCII characters).
+                      details: null
+                      correlation_id: 77e0a1b2c3
+                badJson:
+                  value:
+                    error:
+                      code: MALFORMED_REQUEST
+                      message: Request body is not valid JSON.
+                      details: { position: 41 }
+                      correlation_id: 77e0a1b2c4
+        '409':
+          description: |
+            `IDEMPOTENCY_KEY_REUSED` — the key was used with a different body. No Job is created.
+            `INVALID_JOB_TRANSITION` — the domain refused a forbidden Job transition (should not happen in v1;
+            indicates a race or a bug). The Job is not changed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error:
+                  code: IDEMPOTENCY_KEY_REUSED
+                  message: This Idempotency-Key was already used with a different request body.
+                  details: { existing_job_id: 3f6c2a4e-8a43-4c1b-9f0e-2d1b7f8a9c10 }
+                  correlation_id: 0d9e8f7a6b
+        '413':
+          description: '`PAYLOAD_TOO_LARGE` — body larger than 64 KiB. Rejected before parsing. No Job is created.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error:
+                  code: PAYLOAD_TOO_LARGE
+                  message: Request body exceeds 65536 bytes.
+                  details: { limit_bytes: 65536 }
+                  correlation_id: 5a4b3c2d1e
+        '415':
+          description: '`UNSUPPORTED_MEDIA_TYPE` — Content-Type is not application/json.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422':
+          description: '`UNKNOWN_OPERATION` or `VALIDATION_ERROR`. No Job is created.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                unknownOperation:
+                  summary: Card K3
+                  value:
+                    error:
+                      code: UNKNOWN_OPERATION
+                      message: "Operation 'convert_currency' is not supported."
+                      details: { operation: convert_currency, available_operations: [convert_unit, get_weather, transform_text] }
+                      correlation_id: 1a2b3c4d5e
+                validation:
+                  summary: Card K4 — every wrong field is listed
+                  value:
+                    error:
+                      code: VALIDATION_ERROR
+                      message: 2 parameters are invalid.
+                      details:
+                        fields:
+                          - field: params.precision
+                            code: INVALID_PRECISION
+                            message: Precision must be between 0 and 6.
+                            rejected_value: 9
+                          - field: params.value
+                            code: FIELD_REQUIRED
+                            message: Field is required.
+                            rejected_value: null
+                      correlation_id: 2b3c4d5e6f
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/StorageUnavailable'
+
+  /jobs/{job_id}:
+    get:
+      tags: [jobs]
+      operationId: getJob
+      summary: Get a Job — status, result or error
+      description: |
+        Used to find out what happened after a lost response (card K2) or while a replayed Job is still running.
+        An id that does not exist and an id that is not a valid UUID give the same `404` (card K8).
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      responses:
+        '200':
+          description: The Job.
+          headers:
+            X-Correlation-Id:
+              $ref: '#/components/headers/CorrelationId'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '404':
+          description: '`JOB_NOT_FOUND`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error:
+                  code: JOB_NOT_FOUND
+                  message: Job not found.
+                  details: null
+                  correlation_id: 3c4d5e6f7a
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/StorageUnavailable'
+
+  /health:
+    get:
+      tags: [health]
+      operationId: health
+      summary: Health check (process and database)
+      description: Does not call OpenWeatherMap — an external outage must not make our service "unhealthy".
+      responses:
+        '200':
+          description: Service and database are available.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+              example: { status: ok, checks: { database: ok }, version: 1.0.0 }
+        '503':
+          description: Database is not available.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+              example: { status: unavailable, checks: { database: unavailable }, version: 1.0.0 }
+
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Client-generated key, unique per intended Job (UUID recommended). Reuse it **only** to retry the same request.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[\x21-\x7E]+$'
+    CorrelationIdHeader:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      schema: { type: string, maxLength: 64, pattern: '^[A-Za-z0-9._-]+$' }
+
+  headers:
+    CorrelationId:
+      description: Correlation id of this request (taken from the request or generated).
+      schema: { type: string }
+
+  responses:
+    InternalError:
+      description: '`INTERNAL_ERROR` — unexpected failure; details only in logs under the correlation id.'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example:
+            error:
+              code: INTERNAL_ERROR
+              message: Unexpected error. Use the correlation id when reporting it.
+              details: null
+              correlation_id: 4d5e6f7a8b
+    StorageUnavailable:
+      description: '`STORAGE_UNAVAILABLE` — database not reachable. For POST: the Job may not exist; retry with the same Idempotency-Key.'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  schemas:
+    # ---------- Requests ----------
+    CreateJobRequest:
+      description: |
+        Envelope `{operation, params}`. The schema of `params` depends on `operation`.
+        Unknown fields inside `params` are rejected (`UNKNOWN_FIELD`) so that typos do not pass silently.
+      oneOf:
+        - $ref: '#/components/schemas/ConvertUnitRequest'
+        - $ref: '#/components/schemas/GetWeatherRequest'
+        - $ref: '#/components/schemas/TransformTextRequest'
+      discriminator:
+        propertyName: operation
+        mapping:
+          convert_unit: '#/components/schemas/ConvertUnitRequest'
+          get_weather: '#/components/schemas/GetWeatherRequest'
+          transform_text: '#/components/schemas/TransformTextRequest'
+
+    ConvertUnitRequest:
+      type: object
+      required: [operation, params]
+      additionalProperties: false
+      properties:
+        operation: { type: string, const: convert_unit }
+        params: { $ref: '#/components/schemas/ConvertUnitParams' }
+
+    GetWeatherRequest:
+      type: object
+      required: [operation, params]
+      additionalProperties: false
+      properties:
+        operation: { type: string, const: get_weather }
+        params: { $ref: '#/components/schemas/GetWeatherParams' }
+
+    TransformTextRequest:
+      type: object
+      required: [operation, params]
+      additionalProperties: false
+      properties:
+        operation: { type: string, const: transform_text }
+        params: { $ref: '#/components/schemas/TransformTextParams' }
+
+    ConvertUnitParams:
+      type: object
+      description: |
+        Stage-1 rules (→ `422 VALIDATION_ERROR`): `value` finite (`VALUE_NOT_FINITE`) and |value| ≤ 1e12
+        (`VALUE_OUT_OF_RANGE`); `precision` 0–6 (`INVALID_PRECISION`); `uncertainty` ≥ 0 (`NEGATIVE_UNCERTAINTY`);
+        for **length** conversions `value` > 0 (`VALUE_MUST_BE_POSITIVE`) and `engineer_id` is required (`FIELD_REQUIRED`).
+        For **temperature** conversions a missing `experiment_id` is generated (`EXP-<uuid>`) and returned in the result.
+
+        Stage-2 rules (→ Job `error`, kept in history): unknown unit (`UNSUPPORTED_UNIT`), different dimensions
+        (`INCOMPATIBLE_DIMENSIONS`), temperature below absolute zero (`BELOW_ABSOLUTE_ZERO`), no factor for the pair
+        (`UNSUPPORTED_UNIT_PAIR`), factor or its version missing (`CONVERSION_FACTOR_UNAVAILABLE`).
+
+        Unit aliases are canonicalised: `C`/`°C`/`degC`/`celsius`, `F`/`°F`/`degF`/`fahrenheit`, `K`/`kelvin`,
+        `km`/`kilometer`, `mi`/`mile`, `m`/`meter`, `kg`/`kilogram` … (full list in `docs/tool-contract.md`).
+      required: [value, from_unit, to_unit]
+      additionalProperties: false
+      properties:
+        value: { type: number }
+        from_unit: { type: string, minLength: 1, maxLength: 32 }
+        to_unit: { type: string, minLength: 1, maxLength: 32 }
+        precision: { type: integer, minimum: 0, maximum: 6, default: 3, description: 'Decimal places, rounding half-up.' }
+        uncertainty: { type: number, minimum: 0, description: 'Absolute measurement uncertainty in `from_unit`.' }
+        experiment_id: { type: string, minLength: 1, maxLength: 64 }
+        engineer_id: { type: string, minLength: 1, maxLength: 64 }
+
+    GetWeatherParams:
+      type: object
+      description: |
+        Stage-1: `city` non-empty after trimming, ≤ 100 chars; `country` ISO 3166-1 alpha-2 (`INVALID_COUNTRY_CODE`);
+        `units` metric|imperial (`INVALID_UNITS`).
+        Stage-2 (Job `error`): `CITY_NOT_FOUND`, `AMBIGUOUS_CITY` (details.candidates — repeat with `country`),
+        `RATE_LIMITED`, `SERVICE_CONFIGURATION_ERROR`, `WEATHER_SERVICE_UNAVAILABLE`, `MALFORMED_RESPONSE`, `INVALID_DATA`.
+      required: [city]
+      additionalProperties: false
+      properties:
+        city: { type: string, minLength: 1, maxLength: 100 }
+        country: { type: string, pattern: '^[A-Z]{2}$' }
+        units: { type: string, enum: [metric, imperial], default: metric }
+
+    TransformTextParams:
+      type: object
+      description: |
+        Stage-1: `text` not empty/whitespace (`TEXT_EMPTY`), ≤ 10 000 characters (`TEXT_TOO_LONG`),
+        only characters supported by the profile (`UNSUPPORTED_CHARACTERS`, details list positions);
+        `profile` exists (`PROFILE_NOT_FOUND`); `author_id`, `document_id` required (`FIELD_REQUIRED`).
+      required: [text, author_id, document_id]
+      additionalProperties: false
+      properties:
+        text: { type: string, maxLength: 10000 }
+        profile: { type: string, enum: [title-basic-v1], default: title-basic-v1 }
+        author_id: { type: string, minLength: 1, maxLength: 64 }
+        document_id: { type: string, minLength: 1, maxLength: 64 }
+
+    # ---------- Job ----------
+    JobStatus:
+      type: string
+      enum: [created, running, done, error]
+      description: '`done` and `error` are final. Allowed transitions: docs/architecture.md §3.'
+
+    Job:
+      type: object
+      required: [id, operation, params, status, result, error, tool_version, correlation_id, created_at, started_at, finished_at]
+      properties:
+        id: { type: string, format: uuid }
+        operation: { type: string, enum: [convert_unit, get_weather, transform_text] }
+        params:
+          type: object
+          description: Parameters exactly as accepted (after defaults were applied). Never change.
+        status: { $ref: '#/components/schemas/JobStatus' }
+        result:
+          description: Not null only when `status = done`.
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/ConversionResult'
+            - $ref: '#/components/schemas/WeatherResult'
+            - $ref: '#/components/schemas/TextResult'
+        error:
+          description: Not null only when `status = error`.
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/Error'
+        tool_version: { type: string, example: convert_unit/1, description: 'Tool name and contract version that ran the Job.' }
+        correlation_id: { type: string }
+        created_at: { type: string, format: date-time }
+        started_at: { type: [string, 'null'], format: date-time }
+        finished_at: { type: [string, 'null'], format: date-time }
+
+    ConversionResult:
+      type: object
+      required: [value, raw_value, unit, precision, rounding_rule, display, source, conversion, uncertainty, uncertainty_supplied]
+      properties:
+        value: { type: number, description: 'Rounded half-up to `precision`.' }
+        raw_value: { type: number, description: 'Before rounding.' }
+        unit: { type: string, description: 'Canonical unit id, e.g. `F`, `mi`.' }
+        uncertainty: { type: [number, 'null'], description: 'Propagated uncertainty in target unit; null if not supplied.' }
+        uncertainty_supplied: { type: boolean }
+        precision: { type: integer }
+        rounding_rule: { type: string, enum: [half-up] }
+        display: { type: string, example: '7.671 mi' }
+        source:
+          type: object
+          properties:
+            value: { type: number }
+            unit: { type: string }
+        conversion:
+          type: object
+          description: Which rule was used — saved so that old results stay explainable after a factor update.
+          properties:
+            id: { type: string, example: 'km->mi' }
+            version: { type: string, example: '1' }
+            kind: { type: string, enum: [factor, formula] }
+            factor: { type: [string, 'null'], description: 'Exact decimal factor as a string, e.g. "0.621371192237334".' }
+            expression: { type: [string, 'null'] }
+        experiment_id: { type: [string, 'null'] }
+        engineer_id: { type: [string, 'null'] }
+
+    WeatherResult:
+      type: object
+      required: [city_name, country, lat, lon, units, temperature, humidity_pct, pressure, pressure_unit, wind_speed, wind_speed_available, observed_at, from_cache, attribution]
+      properties:
+        city_id: { type: [integer, 'null'], example: 2643743 }
+        city_name: { type: string, example: London }
+        country: { type: string, example: GB }
+        lat: { type: number }
+        lon: { type: number }
+        units: { type: string, enum: [metric, imperial] }
+        temperature: { type: number, description: '°C for metric, °F for imperial.' }
+        temperature_unit: { type: string, enum: [C, F] }
+        humidity_pct: { type: number, minimum: 0, maximum: 100 }
+        pressure: { type: number, description: 'hPa for metric, inHg for imperial.' }
+        pressure_unit: { type: string, enum: [hPa, inHg] }
+        wind_speed: { type: [number, 'null'], description: 'm/s for metric, mph for imperial; null when the provider did not send it.' }
+        wind_speed_unit: { type: string, enum: ['m/s', mph] }
+        wind_speed_available: { type: boolean }
+        observed_at: { type: string, format: date-time }
+        from_cache: { type: boolean }
+        cached_at: { type: [string, 'null'], format: date-time }
+        attribution: { type: string, example: Weather data provided by OpenWeather }
+
+    TextResult:
+      type: object
+      required: [text, profile, profile_version, author_id, document_id, transformed_at]
+      properties:
+        text: { type: string, example: The Quick Brown Fox Jumps Over The Lazy Dog }
+        profile: { type: string, example: title-basic-v1 }
+        profile_version: { type: string, example: '1' }
+        author_id: { type: string }
+        document_id: { type: string }
+        transformed_at: { type: string, format: date-time }
+
+    # ---------- Errors (one format everywhere) ----------
+    ErrorCode:
+      type: string
+      description: |
+        Request errors (no Job): MALFORMED_REQUEST, IDEMPOTENCY_KEY_REQUIRED, UNSUPPORTED_MEDIA_TYPE, PAYLOAD_TOO_LARGE,
+        UNKNOWN_OPERATION, VALIDATION_ERROR, IDEMPOTENCY_KEY_REUSED, JOB_NOT_FOUND, INVALID_JOB_TRANSITION,
+        STORAGE_UNAVAILABLE, INTERNAL_ERROR.
+        Job errors (`Job.error.code`): UNSUPPORTED_UNIT, UNSUPPORTED_UNIT_PAIR, INCOMPATIBLE_DIMENSIONS, BELOW_ABSOLUTE_ZERO,
+        CONVERSION_FACTOR_UNAVAILABLE, CITY_NOT_FOUND, AMBIGUOUS_CITY, RATE_LIMITED, SERVICE_CONFIGURATION_ERROR,
+        WEATHER_SERVICE_UNAVAILABLE, MALFORMED_RESPONSE, INVALID_DATA, TOOL_INTERNAL_ERROR, JOB_INTERRUPTED.
+      enum:
+        - MALFORMED_REQUEST
+        - IDEMPOTENCY_KEY_REQUIRED
+        - UNSUPPORTED_MEDIA_TYPE
+        - PAYLOAD_TOO_LARGE
+        - UNKNOWN_OPERATION
+        - VALIDATION_ERROR
+        - IDEMPOTENCY_KEY_REUSED
+        - JOB_NOT_FOUND
+        - INVALID_JOB_TRANSITION
+        - STORAGE_UNAVAILABLE
+        - INTERNAL_ERROR
+        - UNSUPPORTED_UNIT
+        - UNSUPPORTED_UNIT_PAIR
+        - INCOMPATIBLE_DIMENSIONS
+        - BELOW_ABSOLUTE_ZERO
+        - CONVERSION_FACTOR_UNAVAILABLE
+        - CITY_NOT_FOUND
+        - AMBIGUOUS_CITY
+        - RATE_LIMITED
+        - SERVICE_CONFIGURATION_ERROR
+        - WEATHER_SERVICE_UNAVAILABLE
+        - MALFORMED_RESPONSE
+        - INVALID_DATA
+        - TOOL_INTERNAL_ERROR
+        - JOB_INTERRUPTED
+
+    FieldErrorCode:
+      type: string
+      enum:
+        - FIELD_REQUIRED
+        - FIELD_TYPE
+        - UNKNOWN_FIELD
+        - VALUE_NOT_FINITE
+        - VALUE_OUT_OF_RANGE
+        - VALUE_MUST_BE_POSITIVE
+        - INVALID_PRECISION
+        - NEGATIVE_UNCERTAINTY
+        - INVALID_UNITS
+        - INVALID_COUNTRY_CODE
+        - TEXT_EMPTY
+        - TEXT_TOO_LONG
+        - UNSUPPORTED_CHARACTERS
+        - PROFILE_NOT_FOUND
+
+    FieldError:
+      type: object
+      required: [field, code, message]
+      properties:
+        field: { type: string, description: 'JSON path in the request body, e.g. `params.precision`.' }
+        code: { $ref: '#/components/schemas/FieldErrorCode' }
+        message: { type: string }
+        rejected_value: { description: 'The value that was rejected (any JSON type; long strings are truncated to 100 chars).' }
+
+    Error:
+      type: object
+      required: [code, message, details]
+      properties:
+        code: { $ref: '#/components/schemas/ErrorCode' }
+        message: { type: string }
+        details:
+          description: |
+            Code-specific, may be null. VALIDATION_ERROR → `{fields: FieldError[]}`; UNKNOWN_OPERATION →
+            `{operation, available_operations}`; INCOMPATIBLE_DIMENSIONS → `{source_dimension, target_dimension,
+            alternatives_for_source, alternatives_for_target}`; UNSUPPORTED_UNIT → `{unit, supported_units}`;
+            AMBIGUOUS_CITY → `{candidates: [{name, country, state, lat, lon}]}`; RATE_LIMITED → `{retry_after_s}`;
+            WEATHER_SERVICE_UNAVAILABLE → `{cause: connect_timeout|read_timeout|connection_error|http_5xx|unexpected_status|deadline_exceeded, attempts, elapsed_ms}`;
+            MALFORMED_RESPONSE / INVALID_DATA → `{field, reason}`. Provider-specific raw data never appears here (only in logs).
+          oneOf:
+            - type: 'null'
+            - type: object
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/Error'
+            - type: object
+              required: [correlation_id]
+              properties:
+                correlation_id: { type: string }
+
+    Health:
+      type: object
+      required: [status, checks]
+      properties:
+        status: { type: string, enum: [ok, unavailable] }
+        checks:
+          type: object
+          properties:
+            database: { type: string, enum: [ok, unavailable] }
+        version: { type: string }
