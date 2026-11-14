@@ -97,3 +97,50 @@ takes no part in handling a request.
 
 
 ## 3. Job state diagram
+
+
+```mermaid
+stateDiagram-v2
+    [*] --> created : submit() — operation known,<br/>Tool.validate passed / save Job
+    created --> running : Dispatcher starts execution / set started_at
+    running --> done : ToolResult ok / save result, finished_at
+    running --> error : ToolResult error, Tool exception<br/>or startup recovery (JOB_INTERRUPTED) / save error
+    created --> error : startup recovery (JOB_INTERRUPTED) / save error
+    done --> [*]
+    error --> [*]
+
+    state running {
+        direction LR
+        [*] --> step
+        step : Tool-internal steps, not Job states.<br/>WeatherTool - resolving, fetching, validating.<br/>Not visible in the API status field.
+    }
+```
+
+States visible in the API (`Job.status`): `created`, `running`, `done`, `error`. `done` and `error` are **final**.
+The weather sub-steps from `requirements.md` (resolving → fetching → validating) are internal steps of the
+WeatherTool; the Dispatcher and the API do not see them (the Tool hides its algorithm).
+
+### Allowed transitions
+
+| From | To | Event / guard | Action |
+|---|---|---|---|
+| (start) | `created` | `POST /jobs`: operation is registered, `Tool.validate` passed, idempotency key is new | Save Job with params, key, request hash, `created_at` |
+| `created` | `running` | Dispatcher starts execution | `started_at` |
+| `running` | `done` | Tool returned `ToolResult.ok` | Save `result`, `finished_at` |
+| `running` | `error` | Tool returned `ToolResult.error`, or raised an unexpected exception (`TOOL_INTERNAL_ERROR`) | Save `error`, `finished_at` |
+| `created` / `running` | `error` | Service startup finds a Job that is not final (process stopped while it was being executed) | `error.code = JOB_INTERRUPTED`, `finished_at` |
+
+Requests rejected **before** a Job exists (malformed JSON, unknown operation, invalid parameters, payload too
+large, missing `Idempotency-Key`) create no Job and no history record — see `openapi.yaml` and
+`tool-contract.md` §3 "Who validates parameters".
+
+### Forbidden transitions and what the system answers
+
+| Attempted transition | Example situation | System answer |
+|---|---|---|
+| `done` -> `running`, `error` -> `running` | Client wants to "run the same job again" (card K5) | The API has no restart operation. Repeating `POST /jobs` with the **same** `Idempotency-Key` returns the existing Job unchanged (`200`, header `Idempotent-Replayed: true`). To run again, the client sends a **new** key -> a **new** Job; the old Job and its result stay unchanged in history. |
+| `done` -> `error`, `error` -> `done` | Late result after recovery, a bug | Domain raises `InvalidJobTransition`; the Job is not changed; logged with correlation id. If it reaches the API: `409 INVALID_JOB_TRANSITION`. |
+| any -> `created` | — | Not possible: `created` is only the initial state of a new Job. |
+| `created` -> `done` / `done` directly | Skipping execution | Domain raises `InvalidJobTransition` (a Job must pass through `running`). |
+| `running` -> `created` | — | Domain raises `InvalidJobTransition`. |
+| Cancel (`created`/`running` -> cancelled) | Card K6 | Not supported in v1 — no `cancelled` state, no endpoint ([ADR-0002](adr/0002-synchronous-job-execution.md)). |
