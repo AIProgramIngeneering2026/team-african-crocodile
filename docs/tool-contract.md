@@ -5,7 +5,7 @@ to every Tool only through this contract (Strategy pattern); the Registry finds 
 (Registry pattern). A new Tool = new class + one `registry.register(...)` line in the composition root. The
 Dispatcher does not change.
 
-## 1. Interface (Python, `app/application/tool.py`)
+## 1. Interface (Python, `src/jobservice/application/tool.py`)
 
 ```python
 from dataclasses import dataclass, field
