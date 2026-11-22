@@ -45,4 +45,29 @@
 - Единицы измерения сверх перечисленных в требованиях (температура: °C, °F, K; длина: mm, cm, m, km, in, ft, yd, mi;
   масса: mg, g, kg, t, lb, oz — названы в сценарии 6).
 - Преобразования текста, кроме профиля `title-basic-v1`.
-- Персональные данные: идентификаторы в параметрах — непрозрачные метки.
+- Персональные данные: идентификаторы в параметрах — непрозрачные метки.## Запуск тестов
+
+Нужен Python 3.10 или новее. Ядро не использует сторонних библиотек; для тестов нужен только `pytest`.
+
+```bash
+python -m pip install -r requirements-dev.txt   # один раз
+python -m pytest                                # все тесты
+```
+
+Или то же через Makefile: `make install`, затем `make test`.
+
+## Структура кода (практика 3 — доменное ядро)
+
+| Путь | Что там |
+|---|---|
+| `src/jobservice/domain/job.py` | Job, таблица переходов, `InvalidJobTransition` |
+| `src/jobservice/application/tool.py` | Контракт Tool: `Tool`, `ToolResult`, `ToolError`, `ParamsInvalid`, `FieldError` |
+| `src/jobservice/application/registry.py` | Registry: имя операции → Tool |
+| `src/jobservice/application/dispatcher.py` | Dispatcher: ведёт Job по состояниям, идемпотентность, восстановление после перезапуска |
+| `src/jobservice/application/ports.py` | Интерфейс хранения `JobRepository` |
+| `src/jobservice/infrastructure/memory_job_repository.py` | Хранение в памяти (SQL — практика 4) |
+| `src/jobservice/tools/` | Tool `convert_unit` и `transform_text` |
+| `src/jobservice/bootstrap.py` | Точка сборки: регистрирует Tool, создаёт Dispatcher |
+| `tests/` | Тесты; `tests/test_villainies.py` — злодейства З1–З6 |
+
+HTTP и база данных появятся на практике 4; `get_weather` — на практике 6.
