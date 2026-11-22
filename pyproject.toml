@@ -1,0 +1,14 @@
+[project]
+name = "jobservice"
+version = "0.3.0"
+description = "Job Execution Service — domain core (Practice 3)"
+requires-python = ">=3.10"
+dependencies = []  # the core needs nothing outside the standard library
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tests"]
+testpaths = ["tests"]
+addopts = "-q"
