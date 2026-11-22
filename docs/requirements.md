@@ -94,7 +94,7 @@ Participant:
 Requests conversion to **miles** with **3 decimal places**. 
 2. Tool validates: value is positive, finite, within supported range. 
 3. Tool resolves unit pair `km → mi` and looks up the **exact conversion factor** from the unit registry: 1 `km = 0.621371192237334 mi` (derived from `1 mile = 1.609344 km` exactly). 
-4. Tool computes raw result: **7.670998... mi.** 
+4. Tool computes raw result: **7.670827368169888 mi** (shown rounded as 7.671 below) 
 5. Tool applies rounding rule: **half-up to 3 decimals → 7.671 mi**. 
 6. Tool records the conversion: input, output, factor id version, rounding rule, timestamp, engineer id. 
 7. Result return: **7.671 mi** (rounded), plus raw value and the exact factor used.
@@ -590,7 +590,7 @@ Scenario 3: Convert kilometers to miles (Unit Converter: length)
     Civil engineer inputs bridge span 12.345 km. Requests conversion to miles with 3 decimal places.
     Tool validates: value is positive, finite, within supported range.
     Tool resolves unit pair km → mi and looks up the exact conversion factor from the unit registry: 1 km = 0 621371192237334 mi (derived from 1 mile = 1.609344 km exactly).
-    Tool computes raw result: 7 670998... mi.
+    Tool computes raw result: 7.670827368169888 mi.
     Tool applies rounding rule: half-up to 3 decimals → 7.671 mi.
     Tool records the conversion: input, output, factor id version, rounding rule, timestamp, engineer id.
     Result return: 7.671 mi (rounded), plus raw value and the exact factor used.
