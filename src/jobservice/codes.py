@@ -1,0 +1,38 @@
+"""Error codes shared by the whole service.
+
+The single source of the names is `docs/api/openapi.yaml` (schemas `ErrorCode` and `FieldErrorCode`).
+This module only repeats them as constants so that code never spells a code by hand.
+A test (`tests/test_contract_consistency.py`) checks that every constant here exists in openapi.yaml.
+"""
+
+# ---- Request errors: no Job is created -------------------------------------------------------------
+MALFORMED_REQUEST = "MALFORMED_REQUEST"
+IDEMPOTENCY_KEY_REQUIRED = "IDEMPOTENCY_KEY_REQUIRED"
+UNKNOWN_OPERATION = "UNKNOWN_OPERATION"
+VALIDATION_ERROR = "VALIDATION_ERROR"
+IDEMPOTENCY_KEY_REUSED = "IDEMPOTENCY_KEY_REUSED"
+JOB_NOT_FOUND = "JOB_NOT_FOUND"
+INVALID_JOB_TRANSITION = "INVALID_JOB_TRANSITION"
+
+# ---- Job errors: saved in Job.error, the Job stays in history ---------------------------------------
+UNSUPPORTED_UNIT = "UNSUPPORTED_UNIT"
+UNSUPPORTED_UNIT_PAIR = "UNSUPPORTED_UNIT_PAIR"
+INCOMPATIBLE_DIMENSIONS = "INCOMPATIBLE_DIMENSIONS"
+BELOW_ABSOLUTE_ZERO = "BELOW_ABSOLUTE_ZERO"
+CONVERSION_FACTOR_UNAVAILABLE = "CONVERSION_FACTOR_UNAVAILABLE"
+TOOL_INTERNAL_ERROR = "TOOL_INTERNAL_ERROR"
+JOB_INTERRUPTED = "JOB_INTERRUPTED"
+
+# ---- Field errors: inside VALIDATION_ERROR.details.fields[] -----------------------------------------
+FIELD_REQUIRED = "FIELD_REQUIRED"
+FIELD_TYPE = "FIELD_TYPE"
+UNKNOWN_FIELD = "UNKNOWN_FIELD"
+VALUE_NOT_FINITE = "VALUE_NOT_FINITE"
+VALUE_OUT_OF_RANGE = "VALUE_OUT_OF_RANGE"
+VALUE_MUST_BE_POSITIVE = "VALUE_MUST_BE_POSITIVE"
+INVALID_PRECISION = "INVALID_PRECISION"
+NEGATIVE_UNCERTAINTY = "NEGATIVE_UNCERTAINTY"
+TEXT_EMPTY = "TEXT_EMPTY"
+TEXT_TOO_LONG = "TEXT_TOO_LONG"
+UNSUPPORTED_CHARACTERS = "UNSUPPORTED_CHARACTERS"
+PROFILE_NOT_FOUND = "PROFILE_NOT_FOUND"
