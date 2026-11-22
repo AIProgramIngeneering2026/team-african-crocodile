@@ -75,7 +75,7 @@ flowchart TB
 
 **What the arrows show:** runtime **calls** inside one process (except the two edges leaving the process:
 SQL to the database and HTTPS to OpenWeatherMap). The arrow points from caller to callee, and the label names the
-method or request. The composition root (`main.py`) is not drawn: it only **creates** the objects at startup
+method or request. The composition root (`src/jobservice/bootstrap.py`) is not drawn: it only **creates** the objects at startup
 (reads configuration from environment variables, builds the Registry, injects the repository and the adapter) and
 takes no part in handling a request.
 
