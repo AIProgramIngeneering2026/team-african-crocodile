@@ -15,6 +15,10 @@ We commit according to the task we shared. If we finish the task we were assigne
 
 Reviews eachother task and commit.
 
+### Вклад участников
+
+https://github.com/AIProgramIngeneering2026/team-sweet-soft/pull/26#discussion_r4701485586
+
 ### Definition of Done: when a task is considered complete.
 
 
