@@ -121,3 +121,42 @@ def test_interrupt_records_job_interrupted():
     assert job.status is JobStatus.ERROR
     assert job.error.code == codes.JOB_INTERRUPTED
     assert job.error.details == {"interrupted_in": "running"}
+
+
+# ---- Job.restore (Practice 4): a stored Job comes back only if it keeps the invariants -----------------
+from datetime import datetime, timezone  # noqa: E402
+
+import pytest as _pytest  # noqa: E402
+
+from jobservice.domain import Job as _Job  # noqa: E402
+
+_T = datetime(2026, 11, 26, tzinfo=timezone.utc)
+
+
+def _restore(**over):
+    fields = dict(job_id="j", operation="op", params={}, idempotency_key="k", request_hash="h", tool_version="op/1",
+                  correlation_id="c", status="done", result={"ok": 1}, error=None, created_at=_T, started_at=_T,
+                  finished_at=_T)
+    fields.update(over)
+    return _Job.restore(**fields)
+
+
+def test_restore_brings_back_a_valid_state_without_running_commands():
+    job = _restore()
+    assert job.status is JobStatus.DONE and job.result == {"ok": 1}
+
+
+@_pytest.mark.parametrize(
+    "over",
+    [
+        {"result": None},                                             # done without result
+        {"status": "error", "result": None},                          # error without error
+        {"finished_at": None},                                        # final without finished_at
+        {"status": "running", "result": None, "finished_at": None, "started_at": None},
+        {"status": "created", "result": None, "finished_at": None},  # created but started
+        {"status": "paid"},                                           # unknown state
+    ],
+)
+def test_restore_refuses_a_damaged_row(over):
+    with _pytest.raises(ValueError):
+        _restore(**over)
