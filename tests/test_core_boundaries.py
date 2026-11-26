@@ -31,13 +31,27 @@ def imports_of(path: Path) -> set[str]:
     return names
 
 
+DATABASE = {"sqlite3", "sqlalchemy", "psycopg", "psycopg2", "asyncpg", "pymysql", "mysql", "alembic"}
+
+# The core: domain, application, tools and codes.py. Still no web framework and no database here.
+CORE_FILES = sorted(
+    p for layer in ("domain", "application", "tools") for p in (SRC / layer).rglob("*.py")
+) + [SRC / "codes.py"]
 ALL_FILES = sorted(SRC.rglob("*.py"))
 
 
-@pytest.mark.parametrize("path", ALL_FILES, ids=lambda p: str(p.relative_to(SRC)))
-def test_no_framework_or_database_imports(path):
+@pytest.mark.parametrize("path", CORE_FILES, ids=lambda p: str(p.relative_to(SRC)))
+def test_core_has_no_framework_or_database_imports(path):
     bad = {m for m in imports_of(path) if m.split(".")[0] in FORBIDDEN_TOP_LEVEL}
     assert not bad, f"{path.name} imports {bad}"
+
+
+@pytest.mark.parametrize("path", ALL_FILES, ids=lambda p: str(p.relative_to(SRC)))
+def test_database_only_in_infrastructure(path):
+    rel = path.relative_to(SRC)
+    top = {m.split(".")[0] for m in imports_of(path)}
+    if rel.parts[0] != "infrastructure":
+        assert not (top & DATABASE), f"{rel} talks to the database: {top & DATABASE}"
 
 
 def test_domain_imports_nothing_from_other_layers():
