@@ -9,7 +9,14 @@ from jobservice.application.errors import (
     ToolContractViolation,
     UnknownOperation,
 )
-from jobservice.application.ports import DuplicateIdempotencyKey, JobRepository
+from jobservice.application.ports import (
+    DuplicateIdempotencyKey,
+    HistoryRecord,
+    JobRepository,
+    JobStateConflict,
+    StorageProbe,
+    StorageUnavailable,
+)
 from jobservice.application.registry import Registry
 from jobservice.application.tool import FieldError, ParamsInvalid, Tool, ToolContext, ToolError, ToolResult
 
@@ -19,13 +26,17 @@ __all__ = [
     "DuplicateIdempotencyKey",
     "DuplicateTool",
     "FieldError",
+    "HistoryRecord",
     "IdempotencyKeyRequired",
     "IdempotencyKeyReused",
     "JobNotFound",
     "JobRepository",
+    "JobStateConflict",
     "MalformedRequest",
     "ParamsInvalid",
     "Registry",
+    "StorageProbe",
+    "StorageUnavailable",
     "SubmitOutcome",
     "Tool",
     "ToolContext",
