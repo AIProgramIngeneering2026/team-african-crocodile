@@ -7,6 +7,8 @@ and a new Tool is added without touching the Dispatcher (only `registry.register
 from __future__ import annotations
 
 import itertools
+import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 
@@ -96,3 +98,31 @@ def new_job(status_path: tuple[str, ...] = (), **overrides: Any) -> Job:
     return job
 
 
+
+
+class CountingTool:
+    """Wraps a real Tool and counts `execute` calls — proves that a replay does not run the work again."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+        self.name = inner.name
+        self.version = inner.version
+        self.execute_calls = 0
+
+    def validate(self, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        return self.inner.validate(params)
+
+    def execute(self, params: Mapping[str, Any], ctx: ToolContext) -> ToolResult:
+        self.execute_calls += 1
+        return self.inner.execute(params, ctx)
+
+
+@contextmanager
+def raw_db(path):
+    """Direct SQL for tests. `with sqlite3.connect(...)` only commits — it does NOT close; this does both."""
+    conn = sqlite3.connect(path)
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
