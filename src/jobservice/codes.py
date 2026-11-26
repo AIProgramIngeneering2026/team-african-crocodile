@@ -13,6 +13,14 @@ VALIDATION_ERROR = "VALIDATION_ERROR"
 IDEMPOTENCY_KEY_REUSED = "IDEMPOTENCY_KEY_REUSED"
 JOB_NOT_FOUND = "JOB_NOT_FOUND"
 INVALID_JOB_TRANSITION = "INVALID_JOB_TRANSITION"
+# Raised only by the HTTP layer (Practice 4): the core never sees these requests.
+UNSUPPORTED_MEDIA_TYPE = "UNSUPPORTED_MEDIA_TYPE"
+PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
+ROUTE_NOT_FOUND = "ROUTE_NOT_FOUND"
+METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED"
+# Service failures (5xx): the client may retry with the same Idempotency-Key.
+STORAGE_UNAVAILABLE = "STORAGE_UNAVAILABLE"
+INTERNAL_ERROR = "INTERNAL_ERROR"
 
 # ---- Job errors: saved in Job.error, the Job stays in history ---------------------------------------
 UNSUPPORTED_UNIT = "UNSUPPORTED_UNIT"

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Job Execution Service API
-  version: 1.0.0
+  version: 1.1.0
   description: |
     Runs small computations as Jobs and keeps their history.
     Operations (Tools): `convert_unit`, `get_weather`, `transform_text`.
@@ -29,10 +29,22 @@ info:
       Do not put personal data into parameters.
     * **Correlation id**: the client may send `X-Correlation-Id`; otherwise the service generates one. It is
       returned in the response header, in error bodies, stored with the Job and written to every log line.
-    * Timestamps are ISO 8601 in UTC (`2026-11-14T14:20:00Z`).
+    * Timestamps are ISO 8601 in UTC (`2026-11-14T14:20:00Z`, milliseconds may be present).
+    * **Unknown endpoints** answer `404 ROUTE_NOT_FOUND`, a documented path with another method answers
+      `405 METHOD_NOT_ALLOWED` (header `Allow`); both use `ErrorResponse`. There is no list, update, delete
+      or admin endpoint (ADR-0004, ADR-0002).
+    * **Storage** (ADR-0006): Jobs, results, idempotency keys and the history of transitions are kept in SQLite and
+      survive a restart. A change of `status` and its result/history record are written in one transaction.
+
+    ## Changelog
+    * **1.1.0** (Practice 4) — added error codes `ROUTE_NOT_FOUND`, `METHOD_NOT_ALLOWED`; `503` sends `Retry-After`;
+      `MALFORMED_REQUEST` also covers duplicate JSON fields, `NaN`/`Infinity` and fields besides `operation`/`params`.
+      Paths, request and Job shapes are unchanged. Clients that treat `ErrorCode` as a closed list must accept the
+      two new values (a new enum value is a compatible change only for tolerant readers, lecture 104).
+    * **1.0.0** (Practice 2) — first version.
 servers:
   - url: http://localhost:8000
-    description: Local run (docker compose up)
+    description: Local run (`make run`)
 
 tags:
   - name: jobs
@@ -49,7 +61,8 @@ paths:
         1. `Content-Type` is `application/json` → else `415 UNSUPPORTED_MEDIA_TYPE`.
         2. Body ≤ 64 KiB → else `413 PAYLOAD_TOO_LARGE`.
         3. `Idempotency-Key` present and valid → else `400 IDEMPOTENCY_KEY_REQUIRED`.
-        4. Body is a JSON object with string `operation` and object `params` → else `400 MALFORMED_REQUEST`.
+        4. Body is a JSON object with string `operation` and object `params` and no other fields, valid UTF-8,
+           no duplicate field names, no `NaN`/`Infinity` → else `400 MALFORMED_REQUEST`.
         5. Key already used → same body: `200` with the existing Job (any status, also `created`/`running`
            if the first request is still executing); different body: `409 IDEMPOTENCY_KEY_REUSED`.
         6. `operation` is registered → else `422 UNKNOWN_OPERATION` (lists available operations).
@@ -335,13 +348,13 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Health' }
-              example: { status: ok, checks: { database: ok }, version: 1.0.0 }
+              example: { status: ok, checks: { database: ok }, version: 0.4.0 }
         '503':
           description: Database is not available.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Health' }
-              example: { status: unavailable, checks: { database: unavailable }, version: 1.0.0 }
+              example: { status: unavailable, checks: { database: unavailable }, version: 0.4.0 }
 
 components:
   parameters:
@@ -381,6 +394,10 @@ components:
               correlation_id: 4d5e6f7a8b
     StorageUnavailable:
       description: '`STORAGE_UNAVAILABLE` — database not reachable. For POST: the Job may not exist; retry with the same Idempotency-Key.'
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema: { type: string, example: '1' }
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -582,7 +599,7 @@ components:
       description: |
         Request errors (no Job): MALFORMED_REQUEST, IDEMPOTENCY_KEY_REQUIRED, UNSUPPORTED_MEDIA_TYPE, PAYLOAD_TOO_LARGE,
         UNKNOWN_OPERATION, VALIDATION_ERROR, IDEMPOTENCY_KEY_REUSED, JOB_NOT_FOUND, INVALID_JOB_TRANSITION,
-        STORAGE_UNAVAILABLE, INTERNAL_ERROR.
+        STORAGE_UNAVAILABLE, INTERNAL_ERROR, ROUTE_NOT_FOUND, METHOD_NOT_ALLOWED.
         Job errors (`Job.error.code`): UNSUPPORTED_UNIT, UNSUPPORTED_UNIT_PAIR, INCOMPATIBLE_DIMENSIONS, BELOW_ABSOLUTE_ZERO,
         CONVERSION_FACTOR_UNAVAILABLE, CITY_NOT_FOUND, AMBIGUOUS_CITY, RATE_LIMITED, SERVICE_CONFIGURATION_ERROR,
         WEATHER_SERVICE_UNAVAILABLE, MALFORMED_RESPONSE, INVALID_DATA, TOOL_INTERNAL_ERROR, JOB_INTERRUPTED.
@@ -598,6 +615,8 @@ components:
         - INVALID_JOB_TRANSITION
         - STORAGE_UNAVAILABLE
         - INTERNAL_ERROR
+        - ROUTE_NOT_FOUND
+        - METHOD_NOT_ALLOWED
         - UNSUPPORTED_UNIT
         - UNSUPPORTED_UNIT_PAIR
         - INCOMPATIBLE_DIMENSIONS
