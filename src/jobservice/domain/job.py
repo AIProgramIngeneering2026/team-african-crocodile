@@ -124,6 +124,60 @@ class Job:
         self._started_at: datetime | None = None
         self._finished_at: datetime | None = None
 
+    # ---- rehydration ------------------------------------------------------------------------------
+    @classmethod
+    def restore(
+        cls,
+        *,
+        job_id: str,
+        operation: str,
+        params: Mapping[str, Any],
+        idempotency_key: str,
+        request_hash: str,
+        tool_version: str,
+        correlation_id: str,
+        status: JobStatus | str,
+        result: Mapping[str, Any] | None,
+        error: JobError | None,
+        created_at: datetime,
+        started_at: datetime | None,
+        finished_at: datetime | None,
+    ) -> "Job":
+        """Rebuild a Job that was stored earlier (used only by repositories).
+
+        Restoring is not a transition: it brings back a state that the commands above already produced.
+        The invariants are checked again, so a damaged row cannot become a Job that breaks them.
+        """
+        job = cls(
+            job_id=job_id,
+            operation=operation,
+            params=params,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            tool_version=tool_version,
+            correlation_id=correlation_id,
+            created_at=created_at,
+        )
+        status = JobStatus(status)
+        if (status is JobStatus.DONE) != (result is not None):
+            raise ValueError(f"stored Job {job_id}: result must be set exactly when status is done")
+        if (status is JobStatus.ERROR) != (error is not None):
+            raise ValueError(f"stored Job {job_id}: error must be set exactly when status is error")
+        if status.is_final != (finished_at is not None):
+            raise ValueError(f"stored Job {job_id}: finished_at must be set exactly when the Job is final")
+        if status is JobStatus.CREATED and started_at is not None:
+            raise ValueError(f"stored Job {job_id}: a created Job has no started_at")
+        if status is JobStatus.RUNNING and started_at is None:
+            raise ValueError(f"stored Job {job_id}: a running Job needs started_at")
+        if error is not None and not isinstance(error, JobError):
+            raise TypeError("error must be a JobError")
+        job._status = status
+        job._result = None if result is None else copy.deepcopy(dict(result))
+        job._error = error
+        job._started_at = started_at
+        job._finished_at = finished_at
+        return job
+
     # ---- read-only view ---------------------------------------------------------------------------
     @property
     def id(self) -> str:
