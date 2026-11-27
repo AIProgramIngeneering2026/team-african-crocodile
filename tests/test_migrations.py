@@ -10,7 +10,7 @@ import pytest
 
 from helpers import raw_db
 
-
+from jobservice.bootstrap import build_app
 from jobservice.infrastructure.migrator import (
     MIGRATIONS_DIR,
     MigrationError,
@@ -57,7 +57,16 @@ def test_migrate_twice_changes_nothing(db_path):
     assert tables_and_indexes(db_path) == before
 
 
+def test_service_refuses_to_start_on_a_missing_or_old_schema(tmp_path, mig_dir):
+    with pytest.raises(SchemaNotCurrent):
+        build_app(tmp_path / "never-migrated.db")
+    assert not (tmp_path / "never-migrated.db").exists()  # the service does not create tables itself
 
+    (mig_dir / "0002_create_job_history.sql").unlink()
+    old = tmp_path / "old.db"
+    migrate(old, mig_dir)  # only 0001
+    with pytest.raises(SchemaNotCurrent, match="0002_create_job_history"):
+        build_app(old)
 
 
 def test_editing_an_applied_migration_is_refused(tmp_path, mig_dir):
