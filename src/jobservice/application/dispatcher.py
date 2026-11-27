@@ -58,6 +58,17 @@ class SubmitOutcome:
     replayed: bool  # True: an existing Job was returned for a repeated Idempotency-Key (HTTP 200, not 201)
 
 
+def check_idempotency_key(key: Any) -> str:
+    """Raise IdempotencyKeyRequired unless `key` is 1–128 visible ASCII characters (ADR-0003, decision 1).
+
+    Public so that the HTTP layer can apply the contract's order of checks (key before body parsing)
+    with the same rule instead of a copy of it.
+    """
+    if not isinstance(key, str) or not _KEY_PATTERN.match(key):
+        raise IdempotencyKeyRequired()
+    return key
+
+
 def request_hash(operation: str, params: Mapping[str, Any]) -> str:
     """SHA-256 of the canonical JSON of the body AS SENT (before defaults), ADR-0003 decision 2."""
     try:
@@ -95,8 +106,7 @@ class Dispatcher:
         idempotency_key: Any,
         correlation_id: str | None = None,
     ) -> SubmitOutcome:
-        if not isinstance(idempotency_key, str) or not _KEY_PATTERN.match(idempotency_key):
-            raise IdempotencyKeyRequired()
+        check_idempotency_key(idempotency_key)
         if not isinstance(operation, str) or not operation:
             raise MalformedRequest("Field 'operation' must be a non-empty string.")
         if not isinstance(params, Mapping):
