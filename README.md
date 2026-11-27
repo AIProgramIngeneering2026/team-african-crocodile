@@ -45,29 +45,75 @@
 - Единицы измерения сверх перечисленных в требованиях (температура: °C, °F, K; длина: mm, cm, m, km, in, ft, yd, mi;
   масса: mg, g, kg, t, lb, oz — названы в сценарии 6).
 - Преобразования текста, кроме профиля `title-basic-v1`.
-- Персональные данные: идентификаторы в параметрах — непрозрачные метки.## Запуск тестов
+- Персональные данные: идентификаторы в параметрах — непрозрачные метки.
 
-Нужен Python 3.10 или новее. Ядро не использует сторонних библиотек; для тестов нужен только `pytest`.
+## Запуск
+
+Нужен Python 3.10 или новее. Сервису **не нужны сторонние пакеты** (ADR-0006); для тестов — `pytest`, `PyYAML`,
+`jsonschema` (`requirements-dev.txt`).
+
+### Тесты — одна команда
 
 ```bash
 python -m pip install -r requirements-dev.txt   # один раз
-python -m pytest                                # все тесты
+python -m pytest                                # все тесты (≈ 3 с)
 ```
 
-Или то же через Makefile: `make install`, затем `make test`.
+То же через Makefile: `make install`, затем `make test`.
 
-## Структура кода (практика 3 — доменное ядро)
+### Сервис
+
+```bash
+make run          # = python -m jobservice migrate && python -m jobservice serve
+```
+
+По шагам:
+
+```bash
+export PYTHONPATH=src                    # если пакет не установлен через pip install -e .
+python -m jobservice migrate             # применяет миграции к var/jobservice.db (создаёт файл)
+python -m jobservice status              # версия схемы и неприменённые миграции
+python -m jobservice serve               # http://127.0.0.1:8000; без миграций не стартует
+```
+
+Настройки — переменные окружения: `JOBSERVICE_DB` (файл SQLite, по умолчанию `var/jobservice.db`),
+`JOBSERVICE_HOST` (`127.0.0.1`), `JOBSERVICE_PORT` (`8000`), `JOBSERVICE_LOG_LEVEL` (`INFO`).
+Логи — JSON по строке на событие, с `correlation_id`.
+
+### Пример запросов (curl)
+
+```bash
+curl -i -X POST http://127.0.0.1:8000/jobs \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: 7b0c1d9e-demo-1' \
+  -d '{"operation":"convert_unit","params":{"value":25,"from_unit":"C","to_unit":"F","precision":2}}'
+# 201 Created, Location: /jobs/<id>; тот же запрос ещё раз -> 200, Idempotent-Replayed: true
+
+curl -i http://127.0.0.1:8000/jobs/<id>     # состояние и результат; переживает перезапуск сервиса
+curl -i http://127.0.0.1:8000/health        # 200 {"status":"ok","checks":{"database":"ok"}}
+```
+
+Контракт API — [`docs/api/openapi.yaml`](docs/api/openapi.yaml) (OpenAPI 3.1, версия 1.1.0). Код проверяется по
+нему тестами: каждый ответ в тестах API сверяется со схемой, статусом и заголовками из контракта.
+
+## Структура кода
 
 | Путь | Что там |
 |---|---|
-| `src/jobservice/domain/job.py` | Job, таблица переходов, `InvalidJobTransition` |
+| `src/jobservice/domain/job.py` | Job, таблица переходов, `InvalidJobTransition`, `Job.restore` (загрузка из БД с проверкой инвариантов) |
 | `src/jobservice/application/tool.py` | Контракт Tool: `Tool`, `ToolResult`, `ToolError`, `ParamsInvalid`, `FieldError` |
 | `src/jobservice/application/registry.py` | Registry: имя операции → Tool |
 | `src/jobservice/application/dispatcher.py` | Dispatcher: ведёт Job по состояниям, идемпотентность, восстановление после перезапуска |
-| `src/jobservice/application/ports.py` | Интерфейс хранения `JobRepository` |
-| `src/jobservice/infrastructure/memory_job_repository.py` | Хранение в памяти (SQL — практика 4) |
+| `src/jobservice/application/ports.py` | Интерфейс хранения `JobRepository`, `StorageUnavailable`, `JobStateConflict`, `HistoryRecord` |
+| `src/jobservice/infrastructure/sqlite_job_repository.py` | Хранение в SQLite: Job + история в одной транзакции |
+| `src/jobservice/infrastructure/migrations/*.sql` | Миграции схемы: `0001_create_jobs`, `0002_create_job_history` |
+| `src/jobservice/infrastructure/migrator.py` | Применение миграций, таблица версий `schema_migrations` |
+| `src/jobservice/infrastructure/memory_job_repository.py` | Хранение в памяти — только для модульных тестов |
+| `src/jobservice/api/app.py` | HTTP API (WSGI): маршруты, проверки HTTP, таблица «код ошибки → статус» |
+| `src/jobservice/api/dto.py` | DTO ответа: Job и единое тело ошибки |
+| `src/jobservice/server.py`, `__main__.py` | Сервер, JSON-логи, команды `migrate` / `status` / `serve` |
 | `src/jobservice/tools/` | Tool `convert_unit` и `transform_text` |
-| `src/jobservice/bootstrap.py` | Точка сборки: регистрирует Tool, создаёт Dispatcher |
-| `tests/` | Тесты; `tests/test_villainies.py` — злодейства З1–З6 |
+| `src/jobservice/bootstrap.py` | Точка сборки: Tool, репозиторий, Dispatcher, приложение |
+| `tests/` | Тесты; `test_api.py` — путь и ошибки, `test_contract_openapi.py` — сверка с контрактом, `test_storage.py` — хранение, транзакции, перезапуск, гонки, `test_migrations.py`, `test_violations_n40_n49.py` — Н40–Н49, `test_villainies.py` — З1–З6 |
 
-HTTP и база данных появятся на практике 4; `get_weather` — на практике 6.
+Решения: [ADR-0006](docs/adr/0006-sqlite-storage-migrations-and-stdlib-http.md) — хранилище, миграции, транзакции, HTTP.
+`get_weather` появится на практике 6, PostgreSQL — на практике 7.

@@ -1,7 +1,7 @@
 # ADR-0001: One process (modular monolith) with local Tools and an adapter for OpenWeatherMap
 
 - **Date:** 2026-11-14
-- **Status:** Accepted (Practice 2)
+- **Status:** Accepted (Practice 2); HTTP framework amended by [ADR-0006](0006-sqlite-storage-migrations-and-stdlib-http.md) (standard-library WSGI instead of FastAPI)
 - **Deciders:** БалчаНМ, ТегеньСБ
 
 ## Context and constraints

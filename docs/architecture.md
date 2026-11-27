@@ -34,7 +34,7 @@ flowchart TB
     client(["HTTP client"])
 
     subgraph svc["Job Execution Service — one process (ADR-0001)"]
-        http["<b>HTTP API layer</b><br/>FastAPI routers, middleware"]
+        http["<b>HTTP API layer</b><br/>WSGI app, standard library<br/>(ADR-0006)"]
         disp["<b>Dispatcher</b><br/>application service:<br/>submit job, get job"]
         reg["<b>Registry</b><br/>operation name → Tool"]
         job["<b>Job</b><br/>domain entity:<br/>states and transitions"]
@@ -48,11 +48,11 @@ flowchart TB
         units["<b>UnitRegistry</b><br/>units, dimensions,<br/>factors + versions"]
         cache["<b>WeatherCache</b><br/>in-memory, TTL 10 min"]
         owmA["<b>OpenWeatherMapAdapter</b><br/>implements WeatherProvider"]
-        repo["<b>SqlJobRepository</b><br/>implements JobRepository"]
+        repo["<b>SqliteJobRepository</b><br/>implements JobRepository"]
         health["<b>Health check</b>"]
     end
 
-    db[("Database<br/>SQLite now, PostgreSQL by Practice 7<br/>table jobs + migrations")]
+    db[("Database<br/>SQLite now, PostgreSQL by Practice 7<br/>tables jobs, job_history,<br/>schema_migrations")]
     owm["OpenWeatherMap API<br/>[external]"]
 
     client -->|"POST /jobs, GET /jobs/{id}"| http
@@ -92,7 +92,7 @@ takes no part in handling a request.
 | **WeatherTool** | `get_weather`: cache lookup (key: resolved location + units), call to `WeatherProvider`, range validation of the provider data, imperial pressure in inHg, attribution. | Caching policy and range rules. |
 | **WeatherCache** | Fresh entries (≤ 10 min) per location + units; only successful, validated responses are stored. | Storage of cache entries (in-memory in v1; lost on restart — acceptable). |
 | **OpenWeatherMapAdapter** | Translating our request into OpenWeatherMap calls and their responses/errors into our `WeatherData` / `WeatherError`; connect timeout 3 s, read timeout 10 s, bounded retry (see `tool-contract.md`). | URLs, API key, OpenWeatherMap JSON field names, HTTP status codes of the provider. A renamed provider field changes only this component. |
-| **SqlJobRepository** | Storing and loading Jobs; unique constraint on the idempotency key; migrations. | SQL, table layout, the DBMS (SQLite -> PostgreSQL). |
+| **SqliteJobRepository** | Storing and loading Jobs; unique constraint on the idempotency key; Job row + history record in one transaction (ADR-0006). Schema only from numbered SQL migrations (`infrastructure/migrator.py`, `python -m jobservice migrate`). | SQL, table layout, the DBMS (SQLite -> PostgreSQL). |
 | **Health check** | `GET /health`: process is up and the database answers. | How the database is checked. |
 
 
