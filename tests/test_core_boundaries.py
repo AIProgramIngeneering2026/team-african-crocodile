@@ -1,5 +1,10 @@
-"""Checklist item 5: the core does not depend on a web framework or a database driver,
-and the Dispatcher does not know any concrete Tool. Checked on the source code (imports), not by hand."""
+"""The core does not depend on HTTP or on a database driver, and the Dispatcher does not know any concrete Tool.
+Checked on the source code (imports), not by hand.
+
+Practice 4 adds two edge layers, each allowed exactly one kind of outside dependency:
+  * `infrastructure/` may use `sqlite3` (and only it talks to the database);
+  * `api/` and `server.py` may use the standard-library WSGI server (and only they know HTTP).
+`domain/`, `application/` and `tools/` still import neither."""
 
 from __future__ import annotations
 
@@ -9,6 +14,9 @@ from pathlib import Path
 import pytest
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "jobservice"
+
+DATABASE = {"sqlite3", "sqlalchemy", "psycopg", "psycopg2", "asyncpg", "pymysql", "mysql", "alembic"}
+HTTP = {"fastapi", "starlette", "flask", "django", "aiohttp", "uvicorn", "wsgiref", "http"}
 
 FORBIDDEN_TOP_LEVEL = {
     # web frameworks / HTTP servers
@@ -31,9 +39,6 @@ def imports_of(path: Path) -> set[str]:
     return names
 
 
-DATABASE = {"sqlite3", "sqlalchemy", "psycopg", "psycopg2", "asyncpg", "pymysql", "mysql", "alembic"}
-
-# The core: domain, application, tools and codes.py. Still no web framework and no database here.
 CORE_FILES = sorted(
     p for layer in ("domain", "application", "tools") for p in (SRC / layer).rglob("*.py")
 ) + [SRC / "codes.py"]
@@ -42,16 +47,28 @@ ALL_FILES = sorted(SRC.rglob("*.py"))
 
 @pytest.mark.parametrize("path", CORE_FILES, ids=lambda p: str(p.relative_to(SRC)))
 def test_core_has_no_framework_or_database_imports(path):
-    bad = {m for m in imports_of(path) if m.split(".")[0] in FORBIDDEN_TOP_LEVEL}
+    bad = {m for m in imports_of(path) if m.split(".")[0] in FORBIDDEN_TOP_LEVEL | HTTP}
     assert not bad, f"{path.name} imports {bad}"
 
 
 @pytest.mark.parametrize("path", ALL_FILES, ids=lambda p: str(p.relative_to(SRC)))
-def test_database_only_in_infrastructure(path):
+def test_database_only_in_infrastructure_and_http_only_in_api(path):
     rel = path.relative_to(SRC)
     top = {m.split(".")[0] for m in imports_of(path)}
     if rel.parts[0] != "infrastructure":
         assert not (top & DATABASE), f"{rel} talks to the database: {top & DATABASE}"
+    if rel.parts[0] != "api" and rel.name != "server.py":
+        assert not (top & HTTP), f"{rel} knows HTTP: {top & HTTP}"
+
+
+def test_no_third_party_runtime_dependency():
+    """ADR-0006: the service runs on the standard library only (tests may use pytest/yaml/jsonschema)."""
+    import sys
+
+    allowed = set(sys.stdlib_module_names) | {"jobservice"}
+    for path in ALL_FILES:
+        outside = {m.split(".")[0] for m in imports_of(path)} - allowed
+        assert not outside, f"{path.relative_to(SRC)} imports {outside}"
 
 
 def test_domain_imports_nothing_from_other_layers():
@@ -70,3 +87,11 @@ def test_dispatcher_source_names_no_concrete_tool():
     text = (SRC / "application" / "dispatcher.py").read_text(encoding="utf-8")
     for concrete in ("UnitConverterTool", "TextTransformTool", "convert_unit", "transform_text", "get_weather"):
         assert concrete not in text
+
+
+def test_api_is_a_thin_layer_over_the_application():
+    """p4.md item 1: the API only talks to the application layer; it knows no Tool and no SQL."""
+    for path in (SRC / "api").rglob("*.py"):
+        own = {m for m in imports_of(path) if m.startswith("jobservice")}
+        assert not any(m.startswith(("jobservice.tools", "jobservice.infrastructure", "jobservice.bootstrap"))
+                       for m in own), (path.name, own)
