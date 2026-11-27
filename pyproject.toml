@@ -1,14 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "jobservice"
-version = "0.3.0"
-description = "Job Execution Service — domain core (Practice 3)"
+version = "0.4.0"
+description = "Job Execution Service — HTTP API and SQLite storage over the domain core (Practice 4)"
 requires-python = ">=3.10"
-dependencies = []  # the core needs nothing outside the standard library
+dependencies = []  # the service needs nothing outside the standard library (ADR-0006)
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "PyYAML>=6", "jsonschema>=4.18"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "tests"]
 testpaths = ["tests"]
 addopts = "-q"
+
+[project.scripts]
+jobservice = "jobservice.__main__:main"
+
+[tool.setuptools.package-data]
+"jobservice.infrastructure" = ["migrations/*.sql"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
