@@ -1,7 +1,7 @@
 # ADR-0005: Jobs are stored behind a `JobRepository` port; Practice 3 uses an in-memory implementation
 
 - **Date:** 2026-11-22
-- **Status:** Accepted (Practice 3)
+- **Status:** Accepted (Practice 3); superseded for production use by [ADR-0006](0006-sqlite-storage-migrations-and-stdlib-http.md) — the in-memory repository stays for unit tests
 - **Deciders:** БалчаНМ, ТегеньСБ
 
 ## Context and constraints
